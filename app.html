@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CapoMath</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; background: #0f141b; color: #e8eef5; max-width: 720px; margin: 0 auto; padding: 32px 20px 64px; }
+  h1 { margin: 0 0 4px; }
+  p.sub { color: #9fb0c3; margin: 0 0 20px; }
+  .presets { margin: 0 0 20px; }
+  .presets button { background: #1c2530; color: #9fc2e8; border: 1px solid #2d3b4d; border-radius: 999px; padding: 8px 16px; margin: 0 8px 8px 0; cursor: pointer; font-size: .9rem; }
+  .presets button:hover { background: #253243; }
+  section { background: #16202c; border: 1px solid #243143; border-radius: 14px; padding: 20px; margin-bottom: 16px; }
+  h2 { margin: 0 0 14px; font-size: 1.05rem; }
+  .row { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 14px; }
+  label { display: block; font-size: .8rem; color: #9fb0c3; margin-bottom: 4px; }
+  input, select { background: #0f141b; border: 1px solid #2d3b4d; color: #e8eef5; border-radius: 8px; padding: 9px 10px; font-size: 1rem; }
+  input#prog { width: 320px; }
+  .outs { display: flex; flex-wrap: wrap; gap: 14px; }
+  .out { background: #101922; border: 1px solid #243143; border-radius: 12px; padding: 14px 18px; min-width: 140px; flex: 1; }
+  .out .v { font-size: 1.4rem; font-weight: 700; color: #7fc4ff; }
+  .out .k { font-size: .8rem; color: #9fb0c3; margin-top: 4px; }
+  .wide { min-width: 300px; }
+  .wide .v { font-size: 1.05rem; line-height: 1.45; font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; margin-top: 6px; }
+  td, th { text-align: left; padding: 7px 10px; border-bottom: 1px solid #243143; font-size: .95rem; }
+  th { color: #9fb0c3; font-weight: 600; }
+  tr.best td { color: #8fe3a8; font-weight: 700; }
+</style>
+</head>
+<body>
+<h1>&#127928; CapoMath</h1>
+<p class="sub">Capo and transposition math - any key becomes open shapes.</p>
+<div class="presets" id="presets"></div>
+
+<section>
+  <h2>1. Rank my capo options</h2>
+  <div class="row">
+    <div><label>Chord progression (space-separated)</label><input id="prog" type="text" value="Eb Bb Cm Ab"></div>
+  </div>
+  <div class="outs">
+    <div class="out"><div class="v" id="o-best">-</div><div class="k">Best capo</div></div>
+    <div class="out wide"><div class="v" id="o-shapes">-</div><div class="k">Shapes you play</div></div>
+    <div class="out"><div class="v" id="o-score">-</div><div class="k">Difficulty</div></div>
+  </div>
+  <table>
+    <thead><tr><th>Capo</th><th>Shapes</th><th>Hardest</th><th>Total</th></tr></thead>
+    <tbody id="o-table"></tbody>
+  </table>
+</section>
+
+<section>
+  <h2>2. Singer mode</h2>
+  <div class="row">
+    <div><label>Sounding key</label><select id="skey"></select></div>
+    <div><label>Play shapes in</label><select id="pkey"></select></div>
+  </div>
+  <div class="outs">
+    <div class="out"><div class="v" id="o-fret">-</div><div class="k">Capo fret</div></div>
+    <div class="out wide"><div class="v" id="o-fretnote">-</div><div class="k">What that means</div></div>
+  </div>
+</section>
+
+<script>
+// CapoMath engine - capo and transposition math for guitarists. Pure functions, no DOM.
+(function (root) {
+  'use strict';
+
+  var NOTES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  var FLATS = { Db: 1, Eb: 3, Gb: 6, Ab: 8, Bb: 10 };
+
+  function noteIndex(name) {
+    if (name in FLATS) return FLATS[name];
+    var i = NOTES.indexOf(name);
+    if (i < 0) throw new Error('unknown note: ' + name);
+    return i;
+  }
+
+  // Parse 'Bbmaj7' -> {root:'Bb', suffix:'maj7'}; 'F#m' -> {root:'F#', suffix:'m'}
+  function parseChord(chord) {
+    var m = /^([A-G](?:#|b)?)(.*)$/.exec(chord.trim());
+    if (!m) throw new Error('bad chord: ' + chord);
+    return { root: m[1], suffix: m[2] || '' };
+  }
+
+  // Transpose a chord by semitones (positive = up).
+  function transposeChord(chord, semis) {
+    var p = parseChord(chord);
+    var idx = ((noteIndex(p.root) + semis) % 12 + 12) % 12;
+    return NOTES[idx] + p.suffix;
+  }
+
+  // Shapes you play with a capo at fret N: sounding chord transposed DOWN N semitones.
+  function shapesForCapo(progression, capo) {
+    return progression.map(function (c) { return transposeChord(c, -capo); });
+  }
+
+  // Difficulty of one played shape. Open-position friendly chords score low.
+  var EASY_ROOTS = { C: 1, G: 1, D: 1, A: 1, E: 1 };
+  var EASY_MINORS = { Am: 1, Em: 1, Dm: 2 };
+  function chordDifficulty(chord) {
+    var p = parseChord(chord);
+    var name = p.root + p.suffix;
+    if (name in EASY_MINORS) return EASY_MINORS[name];
+    if (p.suffix === '' || p.suffix === '7' || p.suffix === 'sus4' || p.suffix === 'sus2' || p.suffix === 'add9') {
+      if (p.root in EASY_ROOTS) return p.suffix === '' ? 1 : 2;
+    }
+    if (p.suffix === 'm7' && (p.root === 'A' || p.root === 'E')) return 2;
+    if (name === 'F' || name === 'Fmaj7') return 3;
+    if (p.root === 'F' || p.root === 'B' || p.root.indexOf('#') >= 0 || p.root.indexOf('b') >= 0) return 5;
+    if (p.suffix === 'm') return (p.root in EASY_ROOTS) ? 2 : 4;
+    return 3;
+  }
+
+  // Score one capo option over a progression.
+  function optionScore(progression, capo) {
+    var shapes = shapesForCapo(progression, capo);
+    var total = 0, hardest = 0;
+    shapes.forEach(function (s) {
+      var d = chordDifficulty(s);
+      total += d;
+      if (d > hardest) hardest = d;
+    });
+    return { capo: capo, shapes: shapes, total: total, hardest: hardest };
+  }
+
+  // Rank capo options 0..maxFret: sort by hardest chord, then total difficulty.
+  function rankCapos(progression, maxFret) {
+    var opts = [];
+    for (var f = 0; f <= maxFret; f++) opts.push(optionScore(progression, f));
+    opts.sort(function (a, b) {
+      if (a.hardest !== b.hardest) return a.hardest - b.hardest;
+      if (a.total !== b.total) return a.total - b.total;
+      return a.capo - b.capo;
+    });
+    return opts;
+  }
+
+  // Singer mode: sounding key, target shape key -> capo fret (0-11, -1 if impossible to raise).
+  function capoForKey(soundingKey, shapeKey) {
+    var diff = (noteIndex(soundingKey) - noteIndex(shapeKey) + 12) % 12;
+    return diff; // capo this many frets so shapeKey shapes sound in soundingKey
+  }
+
+  var api = {
+    noteIndex: noteIndex,
+    parseChord: parseChord,
+    transposeChord: transposeChord,
+    shapesForCapo: shapesForCapo,
+    chordDifficulty: chordDifficulty,
+    optionScore: optionScore,
+    rankCapos: rankCapos,
+    capoForKey: capoForKey
+  };
+  root.CapoMath = api;
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+(function () {
+  'use strict';
+  var E = window.CapoMath;
+  var KEYS = ['C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B'];
+  ['skey', 'pkey'].forEach(function (id) {
+    var sel = document.getElementById(id);
+    KEYS.forEach(function (k) {
+      var o = document.createElement('option');
+      o.value = k; o.textContent = k;
+      sel.appendChild(o);
+    });
+  });
+  document.getElementById('skey').value = 'Eb';
+  document.getElementById('pkey').value = 'C';
+
+  function set(id, v) { document.getElementById(id).textContent = v; }
+
+  function compute() {
+    var prog = document.getElementById('prog').value.trim().split(/\s+/).filter(Boolean);
+    var table = document.getElementById('o-table');
+    table.innerHTML = '';
+    if (!prog.length) { set('o-best', '-'); set('o-shapes', '-'); set('o-score', '-'); }
+    else {
+      var ranked;
+      try { ranked = E.rankCapos(prog, 7); }
+      catch (e) { set('o-best', '?'); set('o-shapes', e.message); set('o-score', '-'); ranked = null; }
+      if (ranked) {
+        var best = ranked[0];
+        set('o-best', best.capo === 0 ? 'no capo' : 'fret ' + best.capo);
+        set('o-shapes', best.shapes.join('  '));
+        set('o-score', 'hardest ' + best.hardest + ', total ' + best.total);
+        ranked.forEach(function (o) {
+          var tr = document.createElement('tr');
+          if (o === best) tr.className = 'best';
+          [o.capo === 0 ? 'none' : o.capo, o.shapes.join('  '), o.hardest, o.total].forEach(function (v) {
+            var td = document.createElement('td');
+            td.textContent = v;
+            tr.appendChild(td);
+          });
+          table.appendChild(tr);
+        });
+      }
+    }
+    var sk = document.getElementById('skey').value, pk = document.getElementById('pkey').value;
+    var fret = E.capoForKey(sk, pk);
+    set('o-fret', fret === 0 ? 'none' : String(fret));
+    set('o-fretnote', fret === 0
+      ? 'Play in ' + pk + ' with no capo - it already sounds in ' + sk + '.'
+      : fret > 7
+        ? 'Capo ' + fret + ' is past the sweet spot. Consider ' + pk + ' shapes with a partial capo, or transpose the song instead.'
+        : 'Capo at fret ' + fret + ': play ' + pk + ' shapes and it sounds in ' + sk + '.');
+  }
+
+  var presets = [
+    { name: 'Eb anthem', v: { prog: 'Eb Bb Cm Ab', skey: 'Eb', pkey: 'C' } },
+    { name: 'G campfire', v: { prog: 'G C D Em', skey: 'G', pkey: 'G' } },
+    { name: 'C# studio take', v: { prog: 'C# G# F# C#', skey: 'C#', pkey: 'C' } },
+    { name: 'F barre trap', v: { prog: 'F Bb C F', skey: 'F', pkey: 'C' } }
+  ];
+  var holder = document.getElementById('presets');
+  presets.forEach(function (p) {
+    var b = document.createElement('button');
+    b.textContent = p.name;
+    b.addEventListener('click', function () {
+      document.getElementById('prog').value = p.v.prog;
+      document.getElementById('skey').value = p.v.skey;
+      document.getElementById('pkey').value = p.v.pkey;
+      compute();
+    });
+    holder.appendChild(b);
+  });
+
+  ['prog', 'skey', 'pkey'].forEach(function (id) {
+    var el = document.getElementById(id);
+    el.addEventListener('input', compute);
+    el.addEventListener('change', compute);
+  });
+  compute();
+})();
+</script>
+</body>
+</html>
